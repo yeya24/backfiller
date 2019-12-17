@@ -20,7 +20,7 @@ import (
 )
 
 var (
-	defaultDBPath = "data"
+	defaultDBPath = "data/"
 )
 
 // Default duration of a block in milliseconds - 2h.
@@ -38,8 +38,8 @@ func main() {
 		"The rule file to do backfilling.",
 	).Required().ExistingFile()
 
-	dbPath := app.Arg("db path", "database path (default is " + defaultDBPath + ")").Default(defaultDBPath).String()
-	destPath := app.Arg("dest path", "path to generate new block").Default("dest").String()
+	dbPath := app.Arg("db path", "tsdb path (default is " + defaultDBPath + ")").Default(defaultDBPath).String()
+	destPath := app.Arg("dest path", "path to generate new block (default is " + defaultDBPath + ")").Default(defaultDBPath).String()
 
 	kingpin.MustParse(app.Parse(os.Args[1:]))
 	logger := log.NewLogfmtLogger(log.NewSyncWriter(os.Stdout))

@@ -24,13 +24,17 @@ Flags:
 
 Args:
   <rule-file>    The rule file to do backfilling.
-  [<db path>]    database path (default is data)
-  [<dest path>]  path to generate new block
+  [<db path>]    tsdb path (default is data/)
+  [<dest path>]  path to generate new block (default is data/)
 ```
 
 ## Tutorial
 
-Start Prometheus in the local environment
+Start Prometheus in the local environment. It is important to add a flag `--storage.tsdb.allow-overlapping-blocks` to allow overlapping block during tsdb reload.
+
+```
+./prometheus --storage.tsdb.allow-overlapping-blocks
+```
 
 
 Use tsdbcli to check the metrics in tsdb dir `data/`. There is no metric name containing `test`.
@@ -52,7 +56,7 @@ level=info msg="write block" mint=1576563064320 maxt=1576563859000 ulid=01DW98EQ
 blockId=data/01DW98EQVKD55FCJ0QJV2FTT0P
 ```
 
-Check the metrics in tsdb dir again.
+Check the metrics in the tsdb dir again.
 
 ```
 ./tsdbcli dump data | grep test | head
@@ -68,6 +72,8 @@ Check the metrics in tsdb dir again.
 {__name__="test",instance="localhost:9090",job="prometheus",key="value"} 2 1576563114000
 ```
 
-Currently the tool cannot load the block into Prometheus directly. So simply restart the Prometheus and check the UI.
+Since Prometheus will automatically merge the blocks in next compaction, we can see the generated data after the compaction, or simply restart Prometheus. 
+
+Then we can check the results in the Web UI.
 
 ![alt text](exp.png)
