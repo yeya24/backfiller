@@ -1,6 +1,6 @@
 # rule-backfill
 
-A cli tool to do retroactive recording rule evaluation.
+A practice-purposed cli tool to do retroactive recording rule evaluation for Prometheus.
 
 Aims to fix issue https://github.com/prometheus/prometheus/issues/11.
 
@@ -28,15 +28,22 @@ Args:
   [<dest path>]  path to generate new block
 ```
 
-## Example
+## Tutorial
 
-1. Use tsdbcli to check the metrics in tsdb dir. There is no metric name containing `test`.
+1. Start Prometheus in the local environment
+
+
+2. Use tsdbcli to check the metrics in tsdb dir `data/`. There is no metric name containing `test`.
 
 ```
 ./tsdbcli dump data | grep test
 ```
 
-2. Do backfilling based on rule file `example.yaml`. The first `data` arg specifies the tsdb dir to query the past data. The second `data` arg specifies the dir to generate the new block.
+3. Do backfilling based on rule file `example.yaml`. 
+
+The first `data` arg specifies the tsdb dir to query the past data. 
+
+The second `data` arg specifies the dir to generate the new block.
 
 ```
 ./rule-backfill example_rule.yaml data data
@@ -47,7 +54,7 @@ level=info msg="write block" mint=1576563064320 maxt=1576563859000 ulid=01DW98EQ
 blockId=data/01DW98EQVKD55FCJ0QJV2FTT0P
 ```
 
-3. Check the metrics in tsdb dir again.
+4. Check the metrics in tsdb dir again.
 
 ```
 ./tsdbcli dump data | grep test | head
@@ -63,6 +70,6 @@ blockId=data/01DW98EQVKD55FCJ0QJV2FTT0P
 {__name__="test",instance="localhost:9090",job="prometheus",key="value"} 2 1576563114000
 ```
 
-4. Currently the tool cannot load the block into Prometheus directly. So simply restart the Prometheus and check the UI.
+5. Currently the tool cannot load the block into Prometheus directly. So simply restart the Prometheus and check the UI.
 
 ![alt text](exp.png)
