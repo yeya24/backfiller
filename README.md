@@ -30,20 +30,18 @@ Args:
 
 ## Tutorial
 
-1. Start Prometheus in the local environment
+Start Prometheus in the local environment
 
 
-2. Use tsdbcli to check the metrics in tsdb dir `data/`. There is no metric name containing `test`.
+Use tsdbcli to check the metrics in tsdb dir `data/`. There is no metric name containing `test`.
 
 ```
 ./tsdbcli dump data | grep test
 ```
 
-3. Do backfilling based on rule file `example.yaml`. 
+Do backfilling based on rule file `example.yaml`. It will firstly validate the rule file and then loads its recording rules.
 
-The first `data` arg specifies the tsdb dir to query the past data. 
-
-The second `data` arg specifies the dir to generate the new block.
+The first `data` arg specifies the tsdb dir to query the past data and the second one specifies the dir to generate the new block. 
 
 ```
 ./rule-backfill example_rule.yaml data data
@@ -54,7 +52,7 @@ level=info msg="write block" mint=1576563064320 maxt=1576563859000 ulid=01DW98EQ
 blockId=data/01DW98EQVKD55FCJ0QJV2FTT0P
 ```
 
-4. Check the metrics in tsdb dir again.
+Check the metrics in tsdb dir again.
 
 ```
 ./tsdbcli dump data | grep test | head
@@ -70,6 +68,6 @@ blockId=data/01DW98EQVKD55FCJ0QJV2FTT0P
 {__name__="test",instance="localhost:9090",job="prometheus",key="value"} 2 1576563114000
 ```
 
-5. Currently the tool cannot load the block into Prometheus directly. So simply restart the Prometheus and check the UI.
+Currently the tool cannot load the block into Prometheus directly. So simply restart the Prometheus and check the UI.
 
 ![alt text](exp.png)
