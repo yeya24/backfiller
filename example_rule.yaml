@@ -1,0 +1,10 @@
+groups:
+  - name: test-alert-group
+    interval: 5s
+    rules:
+      - record: test
+        expr: up * 2
+        labels:
+          key: value
+      - record: test1
+        expr: up - 1

@@ -23,8 +23,13 @@ var (
 	defaultDBPath = "data"
 )
 
+// Default duration of a block in milliseconds - 2h.
+const (
+	defaultBlockDuration = int64(2 * 60 * 60 * 1000)
+)
+
 func main() {
-	app := kingpin.New(filepath.Base(os.Args[0]), "Tooling for the Prometheus monitoring system.")
+	app := kingpin.New(filepath.Base(os.Args[0]), "Tooling for backfilling Prometheus Recording Rules.")
 	app.Version("v0.0.1")
 	app.HelpFlag.Short('h')
 
@@ -33,12 +38,13 @@ func main() {
 		"The rule file to do backfilling.",
 	).Required().ExistingFile()
 
-	dbPath := app.Arg("db path", "").Default("database path (default is " + defaultDBPath + ")").String()
+	dbPath := app.Arg("db path", "database path (default is " + defaultDBPath + ")").Default(defaultDBPath).String()
+	destPath := app.Arg("dest path", "path to generate new block").Default("dest").String()
 
 	kingpin.MustParse(app.Parse(os.Args[1:]))
 	logger := log.NewLogfmtLogger(log.NewSyncWriter(os.Stdout))
 	opts := &tsdb.Options{
-		BlockRanges: []int64{2*3600*1000},
+		BlockRanges: []int64{defaultBlockDuration},
 		WALSegmentSize: 0,
 		NoLockfile:     true,
 	}
@@ -50,7 +56,7 @@ func main() {
 	}
 	defer db.Close()
 
-	os.Exit(backfillingRule(db, *ruleFile, logger))
+	os.Exit(backfillRule(db, *destPath, *ruleFile, logger))
 }
 
 type recordingRule struct {
@@ -64,7 +70,7 @@ func NewRecordingRule(name string, interval model.Duration, vector promql.Expr, 
 	return &recordingRule{name, time.Duration(interval), vector, lset}
 }
 
-func backfillingRule(db *tsdb.DB, filename string, logger log.Logger) int {
+func backfillRule(db *tsdb.DB, dest, filename string, logger log.Logger) int {
 	rgs, errs := rulefmt.ParseFile(filename)
 	if errs != nil {
 		logger.Log("err", errs)
@@ -72,7 +78,6 @@ func backfillingRule(db *tsdb.DB, filename string, logger log.Logger) int {
 	}
 
 	var rules []*recordingRule
-
 	for _, rg := range rgs.Groups {
 		for _, rule := range rg.Rules {
 			if rule.Record != "" {
@@ -97,8 +102,8 @@ func backfillingRule(db *tsdb.DB, filename string, logger log.Logger) int {
 
 	queryEngine := promql.NewEngine(opts)
 
-	// Set the maxtime to now
-	minTime, maxTime := db.Head().MinTime(), time.Now().Unix()*1000
+	// Set the maxtime to now - 1s
+	minTime, maxTime := db.Head().MinTime(), (time.Now().Unix() - 1) * 1000
 	for _, block := range db.Blocks() {
 		minTime = min(minTime, block.MinTime())
 	}
@@ -107,51 +112,36 @@ func backfillingRule(db *tsdb.DB, filename string, logger log.Logger) int {
 	startTimeMargin := int64(2 * 2 * time.Hour.Seconds() * 1000)
 	localStorage.Set(db, startTimeMargin)
 
-	appender := db.Appender()
-
+	mss := []*tsdb.MetricSample{}
 	queryFunc := prom_rules.EngineQueryFunc(queryEngine, localStorage)
 	for _, rule := range rules {
-		for t := minTime + rule.interval.Milliseconds(); t < maxTime; t += rule.interval.Milliseconds() {
+		for t := maxTime; t >= minTime + rule.interval.Milliseconds(); t -= rule.interval.Milliseconds() {
 			vector, err := queryFunc(context.Background(), rule.vector.String(), time.Unix(t/1e3, 0))
 			if err != nil {
 				logger.Log("err", err)
 				return 1
 			}
-			if len(vector) > 0 {
-				if err = addSamples(appender, rule, vector); err != nil {
-					logger.Log("err", err)
-					return 1
+			for _, sample := range vector {
+				lb := labels.NewBuilder(sample.Metric)
+				lb.Set(labels.MetricName, rule.name)
+
+				for _, l := range rule.lset {
+					lb.Set(l.Name, l.Value)
 				}
+				mss = append(mss, &tsdb.MetricSample{Labels: lb.Labels(), Value: sample.V, TimestampMs: sample.T})
 			}
 		}
 	}
 
+	blockID, err :=  tsdb.CreateBlock(mss, dest, minTime, maxTime, logger)
+	if err != nil {
+		logger.Log("err", err)
+		return 1
+	}
+
+	logger.Log("blockId", blockID)
+
 	return 0
-}
-
-func addSamples(appender tsdb.Appender, rule *recordingRule, vector promql.Vector) error {
-	// Override the metric name and labels.
-	for i := range vector {
-		sample := &vector[i]
-
-		lb := labels.NewBuilder(sample.Metric)
-
-		lb.Set(labels.MetricName, rule.name)
-
-		for _, l := range rule.lset {
-			lb.Set(l.Name, l.Value)
-		}
-
-		sample.Metric = lb.Labels()
-	}
-
-	for _, s := range vector {
-		if _, err := appender.Add(s.Metric, s.T, s.V); err != nil {
-			return err
-		}
-	}
-
-	return nil
 }
 
 func min(a, b int64) int64 {
