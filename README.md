@@ -1,4 +1,4 @@
-# rule-backfill
+# backfiller
 
 A practice-purposed cli tool to do retroactive recording rule evaluation for Prometheus.
 
@@ -7,14 +7,14 @@ Aims to fix issue https://github.com/prometheus/prometheus/issues/11.
 ## Build
 
 `
-GO111MODULE=on go build -o rule-backfill main.go
+GO111MODULE=on go build -o backfiller main.go
 `
 
 ## How to use
 
 ```
-➜  rule-backfill -h
-usage: rule-backfill [<flags>] <rule-file> [<db path>] [<dest path>]
+➜  backfiller -h
+usage: backfiller [<flags>] <rule-file> [<db path>] [<dest path>]
 
 Tooling for backfilling Prometheus Recording Rules.
 
@@ -48,7 +48,7 @@ Do backfilling based on rule file `example.yaml`. It will firstly validate the r
 The first `data` arg specifies the tsdb dir to query the past data and the second one specifies the dir to generate the new block. 
 
 ```
-./rule-backfill example_rule.yaml data data
+./backfiller example_rule.yaml data data
 level=info msg="replaying WAL, this may take awhile"
 level=info msg="WAL segment loaded" segment=0 maxSegment=1
 level=info msg="WAL segment loaded" segment=1 maxSegment=1

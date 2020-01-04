@@ -2,124 +2,220 @@ package main
 
 import (
 	"context"
+	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/go-kit/kit/log"
+	"github.com/go-kit/kit/log/level"
+	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/common/model"
+	"github.com/prometheus/common/promlog"
+	"github.com/prometheus/common/promlog/flag"
 	"github.com/prometheus/prometheus/pkg/labels"
 	"github.com/prometheus/prometheus/pkg/rulefmt"
+	"github.com/prometheus/prometheus/pkg/timestamp"
 	"github.com/prometheus/prometheus/promql"
-	"github.com/prometheus/prometheus/tsdb"
-	kingpin "gopkg.in/alecthomas/kingpin.v2"
-
 	prom_rules "github.com/prometheus/prometheus/rules"
 	store_tsdb "github.com/prometheus/prometheus/storage/tsdb"
-)
-
-var (
-	defaultDBPath = "data/"
+	"github.com/prometheus/prometheus/tsdb"
+	"github.com/prometheus/prometheus/tsdb/wal"
+	"gopkg.in/alecthomas/kingpin.v2"
 )
 
 // Default duration of a block in milliseconds - 2h.
 const (
 	defaultBlockDuration = int64(2 * 60 * 60 * 1000)
+	defaultDBPath        = "data/"
 )
+
+type recordingRule struct {
+	name   string
+	vector promql.Expr
+	lset   labels.Labels
+}
 
 func main() {
 	app := kingpin.New(filepath.Base(os.Args[0]), "Tooling for backfilling Prometheus Recording Rules.")
 	app.Version("v0.0.1")
 	app.HelpFlag.Short('h')
 
-	ruleFile := app.Arg(
-		"rule-file",
-		"The rule file to do backfilling.",
-	).Required().ExistingFile()
+	ruleFile := app.Arg("rule-file", "The rule file for backfilling.").Required().ExistingFile()
 
-	dbPath := app.Arg("db path", "tsdb path (default is " + defaultDBPath + ")").Default(defaultDBPath).String()
-	destPath := app.Arg("dest path", "path to generate new block (default is " + defaultDBPath + ")").Default(defaultDBPath).String()
+	dbPath := app.Arg("db path", "tsdb path (default is "+defaultDBPath+")").Default(defaultDBPath).String()
+
+	destPath := app.Arg("dest path", "path to generate new block (default is "+defaultDBPath+")").Default(defaultDBPath).String()
+
+	maxConcurrency := app.Flag("max-concurrency", "Maximum number of queries executed concurrently.").
+		Default("20").Int()
+
+	maxSamples := app.Flag("max-samples", "Maximum number of samples a single query can load into memory. Note that queries will fail if they try to load more samples than this into memory, so this also limits the number of samples a query can return.").
+		Default("50000000").Int()
+
+	timeout := app.Flag("timeout", "Maximum time a query may take before being aborted.").
+		Default("2m").Duration()
+
+	start := app.Flag("start", "Start time (RFC3339 or Unix timestamp).").String()
+	end := app.Flag("end", "End time (RFC3339 or Unix timestamp).").String()
+
+	evalInterval := app.Flag("eval-interval", "How frequently to evaluate the recording rules.").Default("15s").Duration()
+	maxSamplesInMem := app.Flag("max-samples-in-mem", "maximum number of samples to process in a cycle").Default("10000").Int()
+
+	logCfg := &promlog.Config{}
+	flag.AddFlags(app, logCfg)
 
 	kingpin.MustParse(app.Parse(os.Args[1:]))
-	logger := log.NewLogfmtLogger(log.NewSyncWriter(os.Stdout))
+	logger := promlog.New(logCfg)
+
+	rules, errs := parseRules(*ruleFile, logger)
+	if errs != nil {
+		for _, e := range errs {
+			level.Error(logger).Log("msg", "loading groups failed", "err", e)
+		}
+		return
+	}
+
 	opts := &tsdb.Options{
-		BlockRanges: []int64{defaultBlockDuration},
-		WALSegmentSize: 0,
+		BlockRanges:    []int64{defaultBlockDuration},
+		WALSegmentSize: wal.DefaultSegmentSize,
 		NoLockfile:     true,
 	}
 
 	db, err := tsdb.Open(*dbPath, logger, prometheus.DefaultRegisterer, opts)
 	if err != nil {
-		logger.Log("err", err)
-		os.Exit(1)
+		level.Error(logger).Log("msg", "failed to open tsdb", "path", *dbPath, "err", err)
+		return
 	}
 	defer db.Close()
 
-	os.Exit(backfillRule(db, *destPath, *ruleFile, logger))
+	tr, err := getTimeRange(db, *start, *end)
+	if err != nil {
+		level.Error(logger).Log("err", err)
+		return
+	}
+
+	queryEngine := newQueryEngine(*maxConcurrency, *maxSamples, *timeout, logger)
+	queryFunc := prom_rules.EngineQueryFunc(queryEngine, newLocalStorage(db))
+	backfillRules(rules, *destPath, tr, evalInterval.Milliseconds(), *maxSamplesInMem, queryFunc, logger)
+
+	return
 }
 
-type recordingRule struct {
-	name     string
-	interval time.Duration
-	vector   promql.Expr
-	lset     labels.Labels
+func newQueryEngine(maxConcurrency, maxSamples int, timeout time.Duration, logger log.Logger) *promql.Engine {
+	return promql.NewEngine(promql.EngineOpts{
+		Logger:        logger,
+		Reg:           prometheus.DefaultRegisterer,
+		MaxConcurrent: maxConcurrency,
+		MaxSamples:    maxSamples,
+		Timeout:       timeout,
+	})
 }
 
-func NewRecordingRule(name string, interval model.Duration, vector promql.Expr, lset labels.Labels) *recordingRule {
-	return &recordingRule{name, time.Duration(interval), vector, lset}
+func newLocalStorage(db *tsdb.DB) *store_tsdb.ReadyStorage {
+	var localStorage = &store_tsdb.ReadyStorage{}
+	startTimeMargin := int64(2 * 2 * time.Hour.Seconds() * 1000)
+	localStorage.Set(db, startTimeMargin)
+	return localStorage
 }
 
-func backfillRule(db *tsdb.DB, dest, filename string, logger log.Logger) int {
+func parseRules(filename string, logger log.Logger) ([]*recordingRule, []error) {
 	rgs, errs := rulefmt.ParseFile(filename)
 	if errs != nil {
-		logger.Log("err", errs)
-		return 1
+		return nil, errs
 	}
 
 	var rules []*recordingRule
 	for _, rg := range rgs.Groups {
 		for _, rule := range rg.Rules {
+			// We only consider recording rules.
 			if rule.Record != "" {
 				expr, err := promql.ParseExpr(rule.Expr)
 				if err != nil {
-					logger.Log("err", err)
-					return 1
+					level.Error(logger).Log("msg", "failed to parse expr", "expr", rule.Expr, "err", err)
+					return nil, []error{errors.Wrap(err, filename)}
 				}
-				rules = append(rules,
-					NewRecordingRule(rule.Record, rg.Interval, expr, labels.FromMap(rule.Labels)))
+				rules = append(rules, &recordingRule{rule.Record, expr, labels.FromMap(rule.Labels)})
 			}
 		}
 	}
 
-	opts := promql.EngineOpts{
-		Logger:        logger,
-		Reg:           prometheus.DefaultRegisterer,
-		MaxConcurrent: 20,
-		MaxSamples:    50000000,
-		Timeout:       10 * time.Second,
-	}
+	return rules, nil
+}
 
-	queryEngine := promql.NewEngine(opts)
+type timeRange struct {
+	start time.Time
+	end   time.Time
+}
 
-	// Set the maxtime to now - 1s
-	minTime, maxTime := db.Head().MinTime(), (time.Now().Unix() - 1) * 1000
+func getTimeRange(db *tsdb.DB, start, end string) (*timeRange, error) {
+	var (
+		stime, etime time.Time
+		err          error
+	)
+
+	minTime, maxTime := db.Head().MinTime(), db.Head().MaxTime()
 	for _, block := range db.Blocks() {
 		minTime = min(minTime, block.MinTime())
 	}
 
-	var localStorage = &store_tsdb.ReadyStorage{}
-	startTimeMargin := int64(2 * 2 * time.Hour.Seconds() * 1000)
-	localStorage.Set(db, startTimeMargin)
+	if start != "" {
+		stime, err = parseTime(start)
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to parse start time")
+		}
+		if timestamp.FromTime(stime) < minTime {
+			stime = timestamp.Time(minTime)
+		}
+	} else {
+		stime = timestamp.Time(minTime)
+	}
 
-	mss := []*tsdb.MetricSample{}
-	queryFunc := prom_rules.EngineQueryFunc(queryEngine, localStorage)
+	if end != "" {
+		etime, err = parseTime(end)
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to parse end time")
+		}
+		if timestamp.FromTime(etime) > maxTime {
+			etime = timestamp.Time(maxTime)
+		}
+	} else {
+		etime = timestamp.Time(maxTime)
+	}
+
+	if stime.After(etime) {
+		return nil, errors.New("start time should be before end time")
+	}
+
+	return &timeRange{stime, etime}, nil
+}
+
+func parseTime(s string) (time.Time, error) {
+	if t, err := strconv.ParseFloat(s, 64); err == nil {
+		s, ns := math.Modf(t)
+		return time.Unix(int64(s), int64(ns*float64(time.Second))), nil
+	}
+	if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
+		return t, nil
+	}
+	return time.Time{}, errors.Errorf("cannot parse %q to a valid timestamp", s)
+}
+
+func backfillRules(rules []*recordingRule, dest string, tr *timeRange, evalInterval int64, maxSamples int, queryFunc prom_rules.QueryFunc, logger log.Logger) {
+	start := timestamp.FromTime(tr.start)
+	end := timestamp.FromTime(tr.end)
+
+	var mss []*tsdb.MetricSample
+	var minTime int64 = math.MaxInt64
+	var maxTime int64 = math.MinInt64
+
 	for _, rule := range rules {
-		for t := maxTime; t >= minTime + rule.interval.Milliseconds(); t -= rule.interval.Milliseconds() {
-			vector, err := queryFunc(context.Background(), rule.vector.String(), time.Unix(t/1e3, 0))
+		for t := start; t <= end; t += evalInterval {
+			vector, err := queryFunc(context.Background(), rule.vector.String(), timestamp.Time(t))
 			if err != nil {
-				logger.Log("err", err)
-				return 1
+				level.Warn(logger).Log("err", err)
+				continue
 			}
 			for _, sample := range vector {
 				lb := labels.NewBuilder(sample.Metric)
@@ -129,19 +225,45 @@ func backfillRule(db *tsdb.DB, dest, filename string, logger log.Logger) int {
 					lb.Set(l.Name, l.Value)
 				}
 				mss = append(mss, &tsdb.MetricSample{Labels: lb.Labels(), Value: sample.V, TimestampMs: sample.T})
+
+				// update the samples time range
+				minTime = min(minTime, sample.T)
+				maxTime = max(maxTime, sample.T)
+
+				if len(mss) == maxSamples {
+					blockID, err := tsdb.CreateBlock(mss, dest, minTime, maxTime, logger)
+					if err != nil {
+						level.Error(logger).Log("msg", "failed to create block", "err", err)
+						return
+					}
+
+					minTime = math.MaxInt64
+					maxTime = math.MinInt64
+					mss = mss[:0]
+					level.Info(logger).Log("msg", "create block successfully", "block", blockID)
+				}
 			}
 		}
 	}
 
-	blockID, err :=  tsdb.CreateBlock(mss, dest, minTime, maxTime, logger)
-	if err != nil {
-		logger.Log("err", err)
-		return 1
+	// flush the remaining samples
+	if len(mss) > 0 {
+		blockID, err := tsdb.CreateBlock(mss, dest, minTime, maxTime, logger)
+		if err != nil {
+			level.Error(logger).Log("msg", "failed to create block", "err", err)
+			return
+		}
+		level.Info(logger).Log("msg", "create block successfully", "block", blockID)
 	}
 
-	logger.Log("blockId", blockID)
+	return
+}
 
-	return 0
+func max(a, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func min(a, b int64) int64 {
