@@ -19,13 +19,25 @@ usage: backfiller [<flags>] <rule-file> [<db path>] [<dest path>]
 Tooling for backfilling Prometheus Recording Rules.
 
 Flags:
-  -h, --help     Show context-sensitive help (also try --help-long and --help-man).
-      --version  Show application version.
+  -h, --help                  Show context-sensitive help (also try --help-long and --help-man).
+      --version               Show application version.
+      --max-concurrency=20    Maximum number of queries executed concurrently.
+      --max-samples=50000000  Maximum number of samples a single query can load into memory. Note that queries will fail if they try to load more
+                              samples than this into memory, so this also limits the number of samples a query can return.
+      --timeout=2m            Maximum time a query may take before being aborted.
+      --start=START           Start time (RFC3339 or Unix timestamp).
+      --end=END               End time (RFC3339 or Unix timestamp).
+      --eval-interval=30s     How frequently to evaluate the recording rules.
+      --max-samples-in-mem=10000  
+                              maximum number of samples to process in a cycle
+      --log.level=info        Only log messages with the given severity or above. One of: [debug, info, warn, error]
+      --log.format=logfmt     Output format of log messages. One of: [logfmt, json]
 
 Args:
-  <rule-file>    The rule file to do backfilling.
+  <rule-file>    The rule file for backfilling.
   [<db path>]    tsdb path (default is data/)
   [<dest path>]  path to generate new block (default is data/)
+
 ```
 
 ## Tutorial

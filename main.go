@@ -60,7 +60,7 @@ func main() {
 	start := app.Flag("start", "Start time (RFC3339 or Unix timestamp).").String()
 	end := app.Flag("end", "End time (RFC3339 or Unix timestamp).").String()
 
-	evalInterval := app.Flag("eval-interval", "How frequently to evaluate the recording rules.").Default("15s").Duration()
+	evalInterval := app.Flag("eval-interval", "How frequently to evaluate the recording rules.").Default("30s").Duration()
 	maxSamplesInMem := app.Flag("max-samples-in-mem", "maximum number of samples to process in a cycle").Default("10000").Int()
 
 	logCfg := &promlog.Config{}
