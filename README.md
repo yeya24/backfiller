@@ -29,7 +29,8 @@ Flags:
       --end=END               End time (RFC3339 or Unix timestamp).
       --eval-interval=30s     How frequently to evaluate the recording rules.
       --max-samples-in-mem=10000  
-                              maximum number of samples to process in a cycle
+                              maximum number of samples to process in a cycle.
+      --query-log-file=""     File to which PromQL queries are logged.
       --log.level=info        Only log messages with the given severity or above. One of: [debug, info, warn, error]
       --log.format=logfmt     Output format of log messages. One of: [logfmt, json]
 
