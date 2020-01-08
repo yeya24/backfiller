@@ -15,6 +15,7 @@ import (
 	"github.com/prometheus/common/promlog"
 	"github.com/prometheus/common/promlog/flag"
 	"github.com/prometheus/prometheus/pkg/labels"
+	"github.com/prometheus/prometheus/pkg/logging"
 	"github.com/prometheus/prometheus/pkg/rulefmt"
 	"github.com/prometheus/prometheus/pkg/timestamp"
 	"github.com/prometheus/prometheus/promql"
@@ -61,7 +62,8 @@ func main() {
 	end := app.Flag("end", "End time (RFC3339 or Unix timestamp).").String()
 
 	evalInterval := app.Flag("eval-interval", "How frequently to evaluate the recording rules.").Default("30s").Duration()
-	maxSamplesInMem := app.Flag("max-samples-in-mem", "maximum number of samples to process in a cycle").Default("10000").Int()
+	maxSamplesInMem := app.Flag("max-samples-in-mem", "maximum number of samples to process in a cycle.").Default("10000").Int()
+	queryLogFile := app.Flag("query-log-file", "File to which PromQL queries are logged.").Default("").String()
 
 	logCfg := &promlog.Config{}
 	flag.AddFlags(app, logCfg)
@@ -97,6 +99,16 @@ func main() {
 	}
 
 	queryEngine := newQueryEngine(*maxConcurrency, *maxSamples, *timeout, logger)
+	if *queryLogFile == "" {
+		queryEngine.SetQueryLogger(nil)
+	} else {
+		l, err := logging.NewJSONFileLogger(*queryLogFile)
+		if err != nil {
+			level.Error(logger).Log("msg", "failed to create query logger", "err", err)
+		}
+		queryEngine.SetQueryLogger(l)
+	}
+
 	queryFunc := prom_rules.EngineQueryFunc(queryEngine, newLocalStorage(db))
 	backfillRules(rules, *destPath, tr, evalInterval.Milliseconds(), *maxSamplesInMem, queryFunc, logger)
 
