@@ -8,6 +8,6 @@ require (
 	github.com/pkg/errors v0.8.1
 	github.com/prometheus/client_golang v1.2.1
 	github.com/prometheus/common v0.7.0
-	github.com/prometheus/prometheus v1.8.2-0.20191126064551-80ba03c67da1 // Prometheus master v2.14.0
+	github.com/prometheus/prometheus v1.8.2-0.20200108132843-9d9bc524e5e8
 	gopkg.in/alecthomas/kingpin.v2 v2.2.6
 )
