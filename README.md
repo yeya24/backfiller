@@ -21,7 +21,6 @@ Tooling for backfilling Prometheus Recording Rules.
 Flags:
   -h, --help                  Show context-sensitive help (also try --help-long and --help-man).
       --version               Show application version.
-      --max-concurrency=20    Maximum number of queries executed concurrently.
       --max-samples=50000000  Maximum number of samples a single query can load into memory. Note that queries will fail if they try to load more
                               samples than this into memory, so this also limits the number of samples a query can return.
       --timeout=2m            Maximum time a query may take before being aborted.
@@ -50,10 +49,10 @@ Start Prometheus in the local environment. It is important to add a flag `--stor
 ```
 
 
-Use tsdbcli to check the metrics in tsdb dir `data/`. There is no metric name containing `test`.
+Use [tsdbcli](https://github.com/prometheus/prometheus/tree/master/tsdb/cmd/tsdb) to check the metrics in tsdb dir `data/`. There is no metric name containing `test`.
 
 ```
-./tsdbcli dump data | grep test
+./tsdbcli dump data/ | grep test
 ```
 
 Do backfilling based on rule file `example.yaml`. It will firstly validate the rule file and then loads its recording rules.
@@ -87,6 +86,6 @@ Check the metrics in the tsdb dir again.
 
 Since Prometheus will automatically merge the blocks in next compaction, we can see the generated data after the compaction, or simply restart Prometheus. 
 
-Then we can check the results in the Web UI.
+Then we can check the results on the Web UI.
 
 ![alt text](exp.png)
