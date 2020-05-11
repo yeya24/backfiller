@@ -26,9 +26,7 @@ import (
 	"gopkg.in/alecthomas/kingpin.v2"
 )
 
-// Default duration of a block in milliseconds - 2h.
 const (
-	defaultBlockDuration = int64(2 * 60 * 60 * 1000)
 	defaultDBPath        = "data/"
 )
 
