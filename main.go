@@ -27,7 +27,7 @@ import (
 )
 
 const (
-	defaultDBPath        = "data/"
+	defaultDBPath = "data/"
 )
 
 type recordingRule struct {
