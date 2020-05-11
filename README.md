@@ -60,7 +60,7 @@ Do backfilling based on rule file `example.yaml`. It will firstly validate the r
 The first `data` arg specifies the tsdb dir to query the past data and the second one specifies the dir to generate the new block. 
 
 ```
-./backfiller example_rule.yaml data data
+./backfiller example.yaml data data
 level=info msg="replaying WAL, this may take awhile"
 level=info msg="WAL segment loaded" segment=0 maxSegment=1
 level=info msg="WAL segment loaded" segment=1 maxSegment=1
