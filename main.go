@@ -19,8 +19,8 @@ import (
 	"github.com/prometheus/prometheus/pkg/rulefmt"
 	"github.com/prometheus/prometheus/pkg/timestamp"
 	"github.com/prometheus/prometheus/promql"
+	"github.com/prometheus/prometheus/promql/parser"
 	prom_rules "github.com/prometheus/prometheus/rules"
-	store_tsdb "github.com/prometheus/prometheus/storage/tsdb"
 	"github.com/prometheus/prometheus/tsdb"
 	"github.com/prometheus/prometheus/tsdb/wal"
 	"gopkg.in/alecthomas/kingpin.v2"
@@ -34,7 +34,7 @@ const (
 
 type recordingRule struct {
 	name   string
-	vector promql.Expr
+	vector parser.Expr
 	lset   labels.Labels
 }
 
@@ -48,9 +48,6 @@ func main() {
 	dbPath := app.Arg("db path", "tsdb path (default is "+defaultDBPath+")").Default(defaultDBPath).String()
 
 	destPath := app.Arg("dest path", "path to generate new block (default is "+defaultDBPath+")").Default(defaultDBPath).String()
-
-	maxConcurrency := app.Flag("max-concurrency", "Maximum number of queries executed concurrently.").
-		Default("20").Int()
 
 	maxSamples := app.Flag("max-samples", "Maximum number of samples a single query can load into memory. Note that queries will fail if they try to load more samples than this into memory, so this also limits the number of samples a query can return.").
 		Default("50000000").Int()
@@ -80,14 +77,13 @@ func main() {
 	}
 
 	opts := &tsdb.Options{
-		BlockRanges:    []int64{defaultBlockDuration},
 		WALSegmentSize: wal.DefaultSegmentSize,
 		NoLockfile:     true,
 	}
 
 	db, err := tsdb.Open(*dbPath, logger, prometheus.DefaultRegisterer, opts)
 	if err != nil {
-		level.Error(logger).Log("msg", "failed to open tsdb", "path", *dbPath, "err", err)
+		level.Error(logger).Log("msg", "failed to open TSDB", "path", *dbPath, "err", err)
 		return
 	}
 	defer db.Close()
@@ -98,7 +94,7 @@ func main() {
 		return
 	}
 
-	queryEngine := newQueryEngine(*maxConcurrency, *maxSamples, *timeout, logger)
+	queryEngine := newQueryEngine(*maxSamples, *timeout, logger)
 	if *queryLogFile == "" {
 		queryEngine.SetQueryLogger(nil)
 	} else {
@@ -109,27 +105,19 @@ func main() {
 		queryEngine.SetQueryLogger(l)
 	}
 
-	queryFunc := prom_rules.EngineQueryFunc(queryEngine, newLocalStorage(db))
+	queryFunc := prom_rules.EngineQueryFunc(queryEngine, db)
 	backfillRules(rules, *destPath, tr, evalInterval.Milliseconds(), *maxSamplesInMem, queryFunc, logger)
 
 	return
 }
 
-func newQueryEngine(maxConcurrency, maxSamples int, timeout time.Duration, logger log.Logger) *promql.Engine {
+func newQueryEngine(maxSamples int, timeout time.Duration, logger log.Logger) *promql.Engine {
 	return promql.NewEngine(promql.EngineOpts{
-		Logger:        logger,
-		Reg:           prometheus.DefaultRegisterer,
-		MaxConcurrent: maxConcurrency,
-		MaxSamples:    maxSamples,
-		Timeout:       timeout,
+		Logger:     logger,
+		Reg:        prometheus.DefaultRegisterer,
+		MaxSamples: maxSamples,
+		Timeout:    timeout,
 	})
-}
-
-func newLocalStorage(db *tsdb.DB) *store_tsdb.ReadyStorage {
-	var localStorage = &store_tsdb.ReadyStorage{}
-	startTimeMargin := int64(2 * 2 * time.Hour.Seconds() * 1000)
-	localStorage.Set(db, startTimeMargin)
-	return localStorage
 }
 
 func parseRules(filename string, logger log.Logger) ([]*recordingRule, []error) {
@@ -142,13 +130,13 @@ func parseRules(filename string, logger log.Logger) ([]*recordingRule, []error) 
 	for _, rg := range rgs.Groups {
 		for _, rule := range rg.Rules {
 			// We only consider recording rules.
-			if rule.Record != "" {
-				expr, err := promql.ParseExpr(rule.Expr)
+			if rule.Record.Value != "" {
+				expr, err := parser.ParseExpr(rule.Expr.Value)
 				if err != nil {
 					level.Error(logger).Log("msg", "failed to parse expr", "expr", rule.Expr, "err", err)
 					return nil, []error{errors.Wrap(err, filename)}
 				}
-				rules = append(rules, &recordingRule{rule.Record, expr, labels.FromMap(rule.Labels)})
+				rules = append(rules, &recordingRule{rule.Record.Value, expr, labels.FromMap(rule.Labels)})
 			}
 		}
 	}
