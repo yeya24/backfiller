@@ -52,7 +52,7 @@ Start Prometheus in the local environment. It is important to add a flag `--stor
 Use [tsdbcli](https://github.com/prometheus/prometheus/tree/master/tsdb/cmd/tsdb) to check the metrics in tsdb dir `data/`. There is no metric name containing `test`.
 
 ```
-./tsdbcli dump data/ | grep test
+./tsdbcli dump data | grep test
 ```
 
 Do backfilling based on rule file `example.yaml`. It will firstly validate the rule file and then loads its recording rules.
